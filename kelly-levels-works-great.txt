@@ -669,18 +669,17 @@ namespace NinjaTrader.NinjaScript.Strategies
 		
 		protected override void OnOrderUpdate(Order order, double limitPrice, double stopPrice, int quantity, int filled, double averageFillPrice, OrderState orderState, DateTime time, ErrorCode error)
 		{
-			// Handle order errors
-			if (error != ErrorCode.NoError)
-			{
-				Print("Order error: " + error.ToString() + " for order: " + order.Name);
-				HandleOrderError();
-			}
-			
-			// Reset error counter on successful order
-			if (orderState == OrderState.Filled && error == ErrorCode.NoError)
+			// Handle order state changes
+			if (orderState == OrderState.Filled)
 			{
 				consecutiveErrors = 0;
 				orderErrorOccurred = false;
+				Print("Order filled successfully: " + order.Name);
+			}
+			else if (orderState == OrderState.Rejected || orderState == OrderState.Cancelled)
+			{
+				Print("Order " + orderState.ToString() + ": " + order.Name);
+				HandleOrderError();
 			}
 		}
 		
