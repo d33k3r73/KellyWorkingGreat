@@ -98,6 +98,19 @@ namespace NinjaTrader.NinjaScript.Strategies
 		private bool canSellAtLevelDFromC = false;
 		private DateTime lastTradeTime = DateTime.MinValue;
 		
+		// Daily win/loss tracking variables
+		private int dailyWins = 0;
+		private int dailyLosses = 0;
+		private int maxWinsPerDay = 5;
+		private int maxLossesPerDay = 3;
+		private int currentTradingDate = 0;
+		
+		// Error handling and order management
+		private bool orderErrorOccurred = false;
+		private DateTime lastErrorTime = DateTime.MinValue;
+		private int consecutiveErrors = 0;
+		private int maxConsecutiveErrors = 3;
+		
 		private int		breakEvenTicks		= 4;//default 5, 6		// Default setting for ticks needed to acheive before stop moves to breakeven		
 		private int		plusBreakEven		= 0; //default 3, 2		// Default setting for amount of ticks past breakeven to actually breakeven
 		private int		profitTargetTicks	= 400;//default 200		// Default setting for how many Ticks away from AvgPrice is profit target
@@ -217,6 +230,13 @@ namespace NinjaTrader.NinjaScript.Strategies
 				levelCRiseTime = DateTime.MinValue;
 				canSellAtLevelDFromC = false;
 				lastTradeTime = DateTime.MinValue;
+				
+				// Reset daily win/loss counters for new trading day
+				dailyWins = 0;
+				dailyLosses = 0;
+				orderErrorOccurred = false;
+				consecutiveErrors = 0;
+				Print("New trading day started - Win/Loss counters reset. Max wins: " + maxWinsPerDay + ", Max losses: " + maxLossesPerDay);
 			}
 			
 			barHigh[0] = High[0];
@@ -333,87 +353,124 @@ namespace NinjaTrader.NinjaScript.Strategies
 				, (int) LevelDLine.Width);
 			#endregion
 			
-////			 keep the below code intact for use with a fixed stop, a break even stop and a profit trailing stop =================			
-//			switch (Position.MarketPosition)
-//            {
-////				 Resets the stop loss to the original value when all positions are closed
-//                case MarketPosition.Flat:
-//                    SetStopLoss(CalculationMode.Ticks, stopLossTicks);
-//					previousPrice = 0;
-//					stopPlot = 0;
-//                    break;
+			// Enhanced trailing stop system using existing code structure
+			switch (Position.MarketPosition)
+            {
+				// Resets the stop loss to the original value when all positions are closed
+                case MarketPosition.Flat:
+                    SetStopLoss(CalculationMode.Ticks, stopLossTicks);
+					previousPrice = 0;
+					stopPlot = 0;
+                    break;
 					   
-//                case MarketPosition.Long:
+                case MarketPosition.Long:
+					try
+					{
+						if (previousPrice == 0)
+						{
+							stopPlot = Position.AveragePrice - stopLossTicks * TickSize;  // initial stop plot level
+						}
 						
-//					if (previousPrice == 0)
-//					{
-//						stopPlot = Position.AveragePrice - stopLossTicks * TickSize;  // initial stop plot level
-//					}
+						// Once the price is greater than entry price+ breakEvenTicks ticks, set stop loss to plusBreakeven ticks
+						if (Close[0] > Position.AveragePrice + breakEvenTicks * TickSize  && previousPrice == 0)
+						{
+							initialBreakEven = Position.AveragePrice + plusBreakEven * TickSize;
+							SetStopLoss(CalculationMode.Price, initialBreakEven);
+							previousPrice = Position.AveragePrice;
+							stopPlot = initialBreakEven;
+							Print("Long position moved to breakeven at: " + initialBreakEven);
+						}
+						// Once at breakeven wait till trailProfitTrigger is reached before advancing stoploss by trailStepTicks size step
+						else if (previousPrice != 0 // StopLoss is at breakeven
+								&& Close[0] > previousPrice + trailProfitTrigger * TickSize )
+						{
+							newPrice = previousPrice + trailStepTicks * TickSize; 	// Calculate trail stop adjustment
+							SetStopLoss(CalculationMode.Price, newPrice);			// Readjust stoploss level		
+							previousPrice = newPrice;				 				// save for price adjust on next candle
+							stopPlot = newPrice; 					 				// save to adjust plot line
+							Print("Long trailing stop advanced to: " + newPrice);
+						}
+						
+						// Plot the profit/stop lines
+						if (showLines)
+						{
+							ProfitTarget[0] = Position.AveragePrice + profitTargetTicks * TickSize;
+							StopLoss[0] 	= stopPlot;
+						}
+					}
+					catch (Exception ex)
+					{
+						Print("Error in Long position management: " + ex.Message);
+						HandleOrderError();
+					}
+                    break;
 					
-////                     Once the price is greater than entry price+ breakEvenTicks ticks, set stop loss to plusBreakeven ticks
-//                    if (Close[0] > Position.AveragePrice + breakEvenTicks * TickSize  && previousPrice == 0)
-//                    {
-//						initialBreakEven = Position.AveragePrice + plusBreakEven * TickSize;
-//                        SetStopLoss(CalculationMode.Price, initialBreakEven);
-//						previousPrice = Position.AveragePrice;
-//						stopPlot = initialBreakEven;
-//                    }
-////					 Once at breakeven wait till trailProfitTrigger is reached before advancing stoploss by trailStepTicks size step
-//					else if (previousPrice	!= 0 ////StopLoss is at breakeven
-// 							&& GetCurrentAsk() > previousPrice + trailProfitTrigger * TickSize )
-//					{
-//						newPrice = previousPrice + trailStepTicks * TickSize; 	// Calculate trail stop adjustment
-//						SetStopLoss(CalculationMode.Price, newPrice);			// Readjust stoploss level		
-//						previousPrice = newPrice;				 				// save for price adjust on next candle
-//						stopPlot = newPrice; 					 				// save to adjust plot line
-//					}
-					
-////					 Plot the profit/stop lines
-//					if (showLines)
-//					{
-//						ProfitTarget[0] = Position.AveragePrice + profitTargetTicks * TickSize;
-//						StopLoss[0] 	= stopPlot;
-//					}
-//                    break;
-					
-//                case MarketPosition.Short:
-					
-//					if (previousPrice == 0) 
-//					{
-//						stopPlot = Position.AveragePrice + stopLossTicks * TickSize;  // initial stop plot level
-//					}
-					
-////                     Once the price is Less than entry price - breakEvenTicks ticks, set stop loss to breakeven
-//                    if (Close[0] < Position.AveragePrice - breakEvenTicks * TickSize && previousPrice == 0)
-//                    {
-//						initialBreakEven = Position.AveragePrice - plusBreakEven * TickSize;
-//                        SetStopLoss(CalculationMode.Price, initialBreakEven);
-//						previousPrice = Position.AveragePrice;
-//						stopPlot = initialBreakEven;
-//                    }
-////					 Once at breakeven wait till trailProfitTrigger is reached before advancing stoploss by trailStepTicks size step
-//					else if (previousPrice	!= 0 ////StopLoss is at breakeven
-// 							&& GetCurrentAsk() < previousPrice - trailProfitTrigger * TickSize )
-//					{
-//						newPrice = previousPrice - trailStepTicks * TickSize;
-//						SetStopLoss(CalculationMode.Price, newPrice);
-//						previousPrice = newPrice;
-//						stopPlot = newPrice;
-//					}
-					
-//					if (showLines)
-//					{
-//						ProfitTarget[0] = Position.AveragePrice - profitTargetTicks * TickSize;
-//						StopLoss[0] 	= stopPlot;
-//					}					
-
-//                    break;
-//                default:
-//                    break;
-//			}	
+                case MarketPosition.Short:
+					try
+					{
+						if (previousPrice == 0) 
+						{
+							stopPlot = Position.AveragePrice + stopLossTicks * TickSize;  // initial stop plot level
+						}
+						
+						// Once the price is Less than entry price - breakEvenTicks ticks, set stop loss to breakeven
+						if (Close[0] < Position.AveragePrice - breakEvenTicks * TickSize && previousPrice == 0)
+						{
+							initialBreakEven = Position.AveragePrice - plusBreakEven * TickSize;
+							SetStopLoss(CalculationMode.Price, initialBreakEven);
+							previousPrice = Position.AveragePrice;
+							stopPlot = initialBreakEven;
+							Print("Short position moved to breakeven at: " + initialBreakEven);
+						}
+						// Once at breakeven wait till trailProfitTrigger is reached before advancing stoploss by trailStepTicks size step
+						else if (previousPrice != 0 // StopLoss is at breakeven
+								&& Close[0] < previousPrice - trailProfitTrigger * TickSize )
+						{
+							newPrice = previousPrice - trailStepTicks * TickSize;
+							SetStopLoss(CalculationMode.Price, newPrice);
+							previousPrice = newPrice;
+							stopPlot = newPrice;
+							Print("Short trailing stop advanced to: " + newPrice);
+						}
+						
+						if (showLines)
+						{
+							ProfitTarget[0] = Position.AveragePrice - profitTargetTicks * TickSize;
+							StopLoss[0] 	= stopPlot;
+						}
+					}
+					catch (Exception ex)
+					{
+						Print("Error in Short position management: " + ex.Message);
+						HandleOrderError();
+					}
+                    break;
+                default:
+                    break;
+			}
 			
             if (Position.MarketPosition == MarketPosition.Flat)
             {
+				// Check daily win/loss limits
+				if (dailyWins >= maxWinsPerDay)
+				{
+					Print("Daily win limit reached (" + maxWinsPerDay + "). No more trades today.");
+					return;
+				}
+				
+				if (dailyLosses >= maxLossesPerDay)
+				{
+					Print("Daily loss limit reached (" + maxLossesPerDay + "). No more trades today.");
+					return;
+				}
+				
+				// Check for recent errors
+				if (orderErrorOccurred && consecutiveErrors >= maxConsecutiveErrors)
+				{
+					Print("Too many consecutive errors (" + consecutiveErrors + "). Stopping trading for safety.");
+					return;
+				}
+				
 				// Check if 10 minutes have passed since last trade
 				bool canTrade = lastTradeTime == DateTime.MinValue || (Time[0] - lastTradeTime).TotalMinutes >= 10;
 				
@@ -421,56 +478,92 @@ namespace NinjaTrader.NinjaScript.Strategies
 				if (canTrade && canBuyAtLevelBFromC && 
 					Close[0] >= LevelBValue && Low[0] <= LevelBValue)
 				{
-					_lastBar = CurrentBar;
-					SetProfitTarget(CalculationMode.Ticks, TakeProfit);
-					SetTrailStop(CalculationMode.Ticks, trailingStopTicks);
-					EnterLong(1, "BuyLevelB_FromC");
-					canBuyAtLevelBFromC = false; // Reset condition after trade
-					lastTradeTime = Time[0]; // Set last trade time
-					Print("Market Buy executed at LevelB (" + LevelBValue + ") at " + Time[0].ToString("HH:mm:ss") + " after LevelC drop condition met");
-					return;
+					try
+					{
+						_lastBar = CurrentBar;
+						SetProfitTarget(CalculationMode.Ticks, TakeProfit);
+						SetStopLoss(CalculationMode.Ticks, stopLossTicks);
+						EnterLong(1, "BuyLevelB_FromC");
+						canBuyAtLevelBFromC = false; // Reset condition after trade
+						lastTradeTime = Time[0]; // Set last trade time
+						Print("Market Buy executed at LevelB (" + LevelBValue + ") at " + Time[0].ToString("HH:mm:ss") + " after LevelC drop condition met");
+						return;
+					}
+					catch (Exception ex)
+					{
+						Print("Error entering long at LevelB: " + ex.Message);
+						HandleOrderError();
+						return;
+					}
 				}
 				
 				// Condition 2: Sell at LevelB after rising above LevelA within 5 minutes
 				if (canTrade && canSellAtLevelBFromA && 
 					Close[0] <= LevelBValue && High[0] >= LevelBValue)
 				{
-					_lastBar = CurrentBar;
-					SetProfitTarget(CalculationMode.Ticks, TakeProfit);
-					SetTrailStop(CalculationMode.Ticks, trailingStopTicks);
-					EnterShort(1, "SellLevelB_FromA");
-					canSellAtLevelBFromA = false; // Reset condition after trade
-					lastTradeTime = Time[0]; // Set last trade time
-					Print("Market Sell executed at LevelB (" + LevelBValue + ") at " + Time[0].ToString("HH:mm:ss") + " after LevelA rise condition met");
-					return;
+					try
+					{
+						_lastBar = CurrentBar;
+						SetProfitTarget(CalculationMode.Ticks, TakeProfit);
+						SetStopLoss(CalculationMode.Ticks, stopLossTicks);
+						EnterShort(1, "SellLevelB_FromA");
+						canSellAtLevelBFromA = false; // Reset condition after trade
+						lastTradeTime = Time[0]; // Set last trade time
+						Print("Market Sell executed at LevelB (" + LevelBValue + ") at " + Time[0].ToString("HH:mm:ss") + " after LevelA rise condition met");
+						return;
+					}
+					catch (Exception ex)
+					{
+						Print("Error entering short at LevelB: " + ex.Message);
+						HandleOrderError();
+						return;
+					}
 				}
 				
 				// Condition 3: Buy at LevelD after dropping below LevelA within 5 minutes
 				if (canTrade && canBuyAtLevelDFromA && 
 					Close[0] >= LevelDValue && Low[0] <= LevelDValue)
 				{
-					_lastBar = CurrentBar;
-					SetProfitTarget(CalculationMode.Ticks, TakeProfit);
-					SetTrailStop(CalculationMode.Ticks, trailingStopTicks);
-					EnterLong(1, "BuyLevelD_FromA");
-					canBuyAtLevelDFromA = false; // Reset condition after trade
-					lastTradeTime = Time[0]; // Set last trade time
-					Print("Market Buy executed at LevelD (" + LevelDValue + ") at " + Time[0].ToString("HH:mm:ss") + " after LevelA drop condition met");
-					return;
+					try
+					{
+						_lastBar = CurrentBar;
+						SetProfitTarget(CalculationMode.Ticks, TakeProfit);
+						SetStopLoss(CalculationMode.Ticks, stopLossTicks);
+						EnterLong(1, "BuyLevelD_FromA");
+						canBuyAtLevelDFromA = false; // Reset condition after trade
+						lastTradeTime = Time[0]; // Set last trade time
+						Print("Market Buy executed at LevelD (" + LevelDValue + ") at " + Time[0].ToString("HH:mm:ss") + " after LevelA drop condition met");
+						return;
+					}
+					catch (Exception ex)
+					{
+						Print("Error entering long at LevelD: " + ex.Message);
+						HandleOrderError();
+						return;
+					}
 				}
 				
 				// Condition 4: Sell at LevelD after rising above LevelC within 5 minutes
 				if (canTrade && canSellAtLevelDFromC && 
 					Close[0] <= LevelDValue && High[0] >= LevelDValue)
 				{
-					_lastBar = CurrentBar;
-					SetProfitTarget(CalculationMode.Ticks, TakeProfit);
-					SetTrailStop(CalculationMode.Ticks, trailingStopTicks);
-					EnterShort(1, "SellLevelD_FromC");
-					canSellAtLevelDFromC = false; // Reset condition after trade
-					lastTradeTime = Time[0]; // Set last trade time
-					Print("Market Sell executed at LevelD (" + LevelDValue + ") at " + Time[0].ToString("HH:mm:ss") + " after LevelC rise condition met");
-					return;
+					try
+					{
+						_lastBar = CurrentBar;
+						SetProfitTarget(CalculationMode.Ticks, TakeProfit);
+						SetStopLoss(CalculationMode.Ticks, stopLossTicks);
+						EnterShort(1, "SellLevelD_FromC");
+						canSellAtLevelDFromC = false; // Reset condition after trade
+						lastTradeTime = Time[0]; // Set last trade time
+						Print("Market Sell executed at LevelD (" + LevelDValue + ") at " + Time[0].ToString("HH:mm:ss") + " after LevelC rise condition met");
+						return;
+					}
+					catch (Exception ex)
+					{
+						Print("Error entering short at LevelD: " + ex.Message);
+						HandleOrderError();
+						return;
+					}
 				}
 
 				if (
@@ -552,6 +645,66 @@ namespace NinjaTrader.NinjaScript.Strategies
 			
         	}
 		
+		private void HandleOrderError()
+		{
+			orderErrorOccurred = true;
+			lastErrorTime = Time[0];
+			consecutiveErrors++;
+			
+			// Cancel any pending orders if there's an error
+			if (Position.MarketPosition != MarketPosition.Flat)
+			{
+				try
+				{
+					ExitLong();
+					ExitShort();
+					Print("Emergency exit executed due to order error at " + Time[0].ToString("HH:mm:ss"));
+				}
+				catch (Exception ex)
+				{
+					Print("Error during emergency exit: " + ex.Message);
+				}
+			}
+		}
+		
+		protected override void OnOrderUpdate(Order order, double limitPrice, double stopPrice, int quantity, int filled, double averageFillPrice, OrderState orderState, DateTime time, ErrorCode error)
+		{
+			// Handle order errors
+			if (error != ErrorCode.NoError)
+			{
+				Print("Order error: " + error.ToString() + " for order: " + order.Name);
+				HandleOrderError();
+			}
+			
+			// Reset error counter on successful order
+			if (orderState == OrderState.Filled && error == ErrorCode.NoError)
+			{
+				consecutiveErrors = 0;
+				orderErrorOccurred = false;
+			}
+		}
+		
+		protected override void OnExecutionUpdate(Execution execution, string executionId, double price, int quantity, MarketPosition marketPosition, string orderId, DateTime time)
+		{
+			// Track wins and losses
+			if (execution.Order != null && execution.Order.OrderAction == OrderAction.BuyToCover || execution.Order.OrderAction == OrderAction.Sell)
+			{
+				if (SystemPerformance.AllTrades.Count > 0)
+				{
+					Trade lastTrade = SystemPerformance.AllTrades[SystemPerformance.AllTrades.Count - 1];
+					if (lastTrade.ProfitCurrency > 0)
+					{
+						dailyWins++;
+						Print("Trade WIN #" + dailyWins + " - Profit: $" + lastTrade.ProfitCurrency.ToString("F2"));
+					}
+					else if (lastTrade.ProfitCurrency < 0)
+					{
+						dailyLosses++;
+						Print("Trade LOSS #" + dailyLosses + " - Loss: $" + lastTrade.ProfitCurrency.ToString("F2"));
+					}
+				}
+			}
+		}
 
         #region Properties
 		
@@ -707,6 +860,24 @@ namespace NinjaTrader.NinjaScript.Strategies
 		[NinjaScriptProperty]
 		[Display(Name = "Level D Line", Order = 16, GroupName = "Parameters")]
 		public Stroke LevelDLine { get; set; }
+		
+		[Range(1, int.MaxValue)]
+		[NinjaScriptProperty]
+		[Display(Name="Max Wins Per Day", Description="Maximum number of winning trades allowed per day", Order=17, GroupName="Parameters")]
+		public int MaxWinsPerDay
+		{
+			get { return maxWinsPerDay; }
+			set { maxWinsPerDay = value; }
+		}
+		
+		[Range(1, int.MaxValue)]
+		[NinjaScriptProperty]
+		[Display(Name="Max Losses Per Day", Description="Maximum number of losing trades allowed per day", Order=18, GroupName="Parameters")]
+		public int MaxLossesPerDay
+		{
+			get { return maxLossesPerDay; }
+			set { maxLossesPerDay = value; }
+		}
         #endregion
     }
 }
